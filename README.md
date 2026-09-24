@@ -33,6 +33,10 @@ targets: [
 ]
 ```
 
+## Example App
+
+Explore [TarBackupExample](https://github.com/logdok/TarBackupExample), an iOS SwiftUI application that demonstrates incremental backups, exclusions, direct append, archive comparison and inspection, deletion, selective extraction, repair, and compaction.
+
 ## Documentation
 
 See the [TarBackup User Guide](USER_GUIDE.md) for setup, complete API examples, workflows, error handling, safety behavior, and TAR format limitations.
