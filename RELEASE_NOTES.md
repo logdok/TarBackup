@@ -4,6 +4,8 @@
 
 TarBackup 1.2.0 adds archive editing, source comparison, and configurable backup exclusions.
 
+Documentation: [TarBackup User Guide](USER_GUIDE.md)
+
 ### Added
 
 - Append one file from the manager's source directory with `appendFile(named:)`.
@@ -27,7 +29,7 @@ TarBackup 1.2.0 adds archive editing, source comparison, and configurable backup
 
 - Incremental backup now considers both file size and whole-second modification time.
 - Files with fractional modification timestamps are no longer repeatedly appended when their stored TAR metadata is unchanged.
-- README documentation now covers the complete 1.2.0 API.
+- A dedicated User Guide now covers the complete 1.2.0 API, workflows, safety guidance, error handling, and TAR limitations.
 
 ### Delete behavior
 
