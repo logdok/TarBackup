@@ -10,7 +10,7 @@ public extension TarBackupManager {
         to destinationDirectoryURL: URL,
         overwriteExisting: Bool = true
     ) throws -> URL {
-        try validateArchivePath(relativePath)
+        try TarArchivePath.validate(relativePath)
 
         guard let entry = try repairAndIndexArchive()[relativePath] else {
             throw TarBackupError.archiveEntryNotFound(relativePath)
@@ -32,7 +32,7 @@ public extension TarBackupManager {
         var requestedPaths = [String]()
         var seenPaths = Set<String>()
         for relativePath in relativePaths {
-            try validateArchivePath(relativePath)
+            try TarArchivePath.validate(relativePath)
             if seenPaths.insert(relativePath).inserted {
                 requestedPaths.append(relativePath)
             }
@@ -82,7 +82,7 @@ public extension TarBackupManager {
         }
 
         do {
-            try validateArchivePath(subdirectory)
+            try TarArchivePath.validate(subdirectory)
         } catch {
             throw TarBackupError.invalidSubdirectory(relativePath)
         }
@@ -102,7 +102,7 @@ private extension TarBackupManager {
         guard !entries.isEmpty else { return [] }
 
         for entry in entries {
-            try validateArchivePath(entry.filename)
+            try TarArchivePath.validate(entry.filename)
         }
 
         let fileManager = FileManager.default
@@ -126,19 +126,6 @@ private extension TarBackupManager {
         }
 
         return extractedURLs
-    }
-
-    func validateArchivePath(_ relativePath: String) throws {
-        guard !relativePath.isEmpty,
-              !relativePath.hasPrefix("/"),
-              !relativePath.hasSuffix("/") else {
-            throw TarBackupError.invalidArchivePath(relativePath)
-        }
-
-        let components = relativePath.split(separator: "/", omittingEmptySubsequences: false)
-        guard components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
-            throw TarBackupError.invalidArchivePath(relativePath)
-        }
     }
 
     func prepareDestination(

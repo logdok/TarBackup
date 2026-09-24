@@ -20,26 +20,37 @@ public final class TarBackupManager {
         self.sourceDirectoryURL = sourceDirectoryURL
     }
 
-    /// Performs incremental backup: inspects, repairs archive if needed, and appends new/modified files.
-    public func performBackup() throws {
+    /// Performs an incremental backup, optionally excluding matching files and directories.
+    ///
+    /// Exclusion patterns use the same `*`, `?`, and `**` wildcards as extraction.
+    /// A pattern without a slash is matched against every path component, making values
+    /// such as `node_modules`, `.git`, and `*.tmp` convenient directory-wide exclusions.
+    public func performBackup(excluding exclusionPatterns: [String] = []) throws {
         let index = try repairAndIndexArchive()
-        let sourceFiles = try scanSourceDirectory()
+        let sourceFiles = try scanSourceDirectory(excluding: exclusionPatterns)
+        var filesToAppend = [TarAppendItem]()
 
         for (relativePath, fileURL) in sourceFiles {
             let attributes = try fileManager.attributesOfItem(atPath: fileURL.path)
-            guard let fileDate = attributes[.modificationDate] as? Date else { continue }
+            guard let fileDate = attributes[.modificationDate] as? Date,
+                  let fileSize = (attributes[.size] as? NSNumber)?.uint64Value else { continue }
 
             let needsBackup: Bool
             if let existingEntry = index[relativePath] {
-                // Append if file on disk is newer than the one inside TAR
-                needsBackup = fileDate > existingEntry.modificationDate
+                needsBackup = fileSize != existingEntry.size
+                    || Int64(fileDate.timeIntervalSince1970)
+                    != Int64(existingEntry.modificationDate.timeIntervalSince1970)
             } else {
                 needsBackup = true
             }
 
             if needsBackup {
-                try appendFileToTar(at: relativePath, fullURL: fileURL, modificationDate: fileDate)
+                filesToAppend.append(TarAppendItem(fileURL: fileURL, archivePath: relativePath))
             }
+        }
+
+        if !filesToAppend.isEmpty {
+            try appendFiles(filesToAppend)
         }
     }
 
@@ -98,7 +109,7 @@ public final class TarBackupManager {
         return latestEntryIndex(from: entries).values.sorted { $0.filename < $1.filename }
     }
 
-    private func repairAndListArchiveEntries() throws -> [TarEntryInfo] {
+    func repairAndListArchiveEntries() throws -> [TarEntryInfo] {
         guard fileManager.fileExists(atPath: archiveURL.path) else { return [] }
 
         let readHandle = try FileHandle(forReadingFrom: archiveURL)
@@ -158,37 +169,10 @@ public final class TarBackupManager {
         return index
     }
 
-    private func appendFileToTar(at relativePath: String, fullURL: URL, modificationDate: Date) throws {
-        let fileData = try Data(contentsOf: fullURL, options: .mappedIfSafe)
-
-        if !fileManager.fileExists(atPath: archiveURL.path) {
-            fileManager.createFile(atPath: archiveURL.path, contents: nil)
-        }
-
-        let handle = try FileHandle(forWritingTo: archiveURL)
-        defer { try? handle.close() }
-
-        try handle.seekToEnd()
-
-        let headerData = TarHeader.makeHeader(
-            relativePath: relativePath,
-            fileSize: UInt64(fileData.count),
-            modificationDate: modificationDate
-        )
-
-        try handle.write(contentsOf: headerData)
-        try handle.write(contentsOf: fileData)
-
-        let paddingSize = (512 - (fileData.count % 512)) % 512
-        if paddingSize > 0 {
-            let padding = Data(repeating: 0, count: paddingSize)
-            try handle.write(contentsOf: padding)
-        }
-    }
-
-    private func scanSourceDirectory() throws -> [String: URL] {
+    func scanSourceDirectory(excluding exclusionPatterns: [String]) throws -> [String: URL] {
         var results = [String: URL]()
-        let resourceKeys: [URLResourceKey] = [.isRegularFileKey]
+        let resourceKeys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey]
+        let exclusionRules = TarExclusionRules(patterns: exclusionPatterns)
         let normalizedSourcePath = sourceDirectoryURL
             .standardizedFileURL
             .resolvingSymlinksInPath()
@@ -202,19 +186,47 @@ public final class TarBackupManager {
         ) else { return results }
 
         for case let fileURL as URL in enumerator {
-            let resourceValues = try fileURL.resourceValues(forKeys: [.isRegularFileKey])
-            if resourceValues.isRegularFile == true {
-                let normalizedFilePath = fileURL
-                    .standardizedFileURL
-                    .resolvingSymlinksInPath()
-                    .path
-                guard normalizedFilePath.hasPrefix(sourcePathPrefix) else { continue }
+            let resourceValues = try fileURL.resourceValues(forKeys: Set(resourceKeys))
+            let normalizedFilePath = fileURL
+                .standardizedFileURL
+                .resolvingSymlinksInPath()
+                .path
+            guard normalizedFilePath.hasPrefix(sourcePathPrefix) else { continue }
 
-                let relativePath = String(normalizedFilePath.dropFirst(sourcePathPrefix.count))
+            let relativePath = String(normalizedFilePath.dropFirst(sourcePathPrefix.count))
+            let isDirectory = resourceValues.isDirectory == true
+            if exclusionRules.excludes(relativePath, isDirectory: isDirectory) {
+                if isDirectory {
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+
+            if resourceValues.isRegularFile == true {
                 results[relativePath] = fileURL
             }
         }
         return results
+    }
+
+    /// Removes standard TAR end markers and returns the byte offset for the next entry.
+    func prepareArchiveForAppending() throws -> UInt64 {
+        let entries = try repairAndListArchiveEntries()
+        let appendOffset: UInt64
+        if let lastEntry = entries.last {
+            let paddedSize = lastEntry.size + (512 - (lastEntry.size % 512)) % 512
+            appendOffset = lastEntry.offset + 512 + paddedSize
+        } else {
+            appendOffset = 0
+        }
+
+        guard fileManager.fileExists(atPath: archiveURL.path) else { return appendOffset }
+        let attributes = try fileManager.attributesOfItem(atPath: archiveURL.path)
+        let archiveSize = (attributes[.size] as? NSNumber)?.uint64Value ?? 0
+        if archiveSize != appendOffset {
+            try truncateTar(at: appendOffset)
+        }
+        return appendOffset
     }
 
     private func truncateTar(at offset: UInt64) throws {
