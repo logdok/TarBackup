@@ -2,7 +2,8 @@
 
 import Foundation
 
-public struct TarEntryInfo {
+/// Metadata for a regular file stored in a TAR archive.
+public struct TarEntryInfo: Equatable, Sendable {
     public let filename: String
     public let offset: UInt64
     public let size: UInt64
@@ -81,12 +82,29 @@ public final class TarBackupManager {
     /// Scans TAR headers, truncates broken tails, and builds a map of active files.
     @discardableResult
     public func repairAndIndexArchive() throws -> [String: TarEntryInfo] {
-        guard fileManager.fileExists(atPath: archiveURL.path) else { return [:] }
+        try latestEntryIndex(from: repairAndListArchiveEntries())
+    }
+
+    /// Returns archive contents. By default, only the latest version of each path is returned.
+    ///
+    /// Set `includingSupersededVersions` to `true` to inspect every physical entry in
+    /// append order, including older versions of files that were backed up again.
+    public func listContents(includingSupersededVersions: Bool = false) throws -> [TarEntryInfo] {
+        let entries = try repairAndListArchiveEntries()
+        if includingSupersededVersions {
+            return entries
+        }
+
+        return latestEntryIndex(from: entries).values.sorted { $0.filename < $1.filename }
+    }
+
+    private func repairAndListArchiveEntries() throws -> [TarEntryInfo] {
+        guard fileManager.fileExists(atPath: archiveURL.path) else { return [] }
 
         let readHandle = try FileHandle(forReadingFrom: archiveURL)
         defer { try? readHandle.close() }
 
-        var index = [String: TarEntryInfo]()
+        var entries = [TarEntryInfo]()
         var currentOffset: UInt64 = 0
         let totalFileSize = try readHandle.seekToEnd()
 
@@ -117,18 +135,26 @@ public final class TarBackupManager {
                 break
             }
 
-            // POSIX rule: duplicate filenames overwrite previous entries
-            index[header.filename] = TarEntryInfo(
+            entries.append(TarEntryInfo(
                 filename: header.filename,
                 offset: currentOffset,
                 size: header.fileSize,
                 modificationDate: header.modificationDate
-            )
+            ))
 
             currentOffset = nextOffset
             try readHandle.seek(toOffset: currentOffset)
         }
 
+        return entries
+    }
+
+    private func latestEntryIndex(from entries: [TarEntryInfo]) -> [String: TarEntryInfo] {
+        var index = [String: TarEntryInfo]()
+        for entry in entries {
+            // POSIX rule: a later entry with the same name supersedes an earlier one.
+            index[entry.filename] = entry
+        }
         return index
     }
 
