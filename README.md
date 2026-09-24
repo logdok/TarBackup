@@ -10,6 +10,27 @@ A standalone POSIX TAR backup system for iOS and macOS.
 - **Compaction:** Removes obsolete versions of modified files from the archive.
 - **Background tasks:** Includes `TarCompactorScheduler` for running compaction while the device is connected to external power.
 
+## Installation
+
+Add the package to your `Package.swift`:
+
+```swift
+dependencies: [
+    .package(
+        url: "https://github.com/logdok/TarBackup.git",
+        from: "1.0.0"
+    ),
+],
+targets: [
+    .target(
+        name: "YourApp",
+        dependencies: [
+            .product(name: "TarBackup", package: "TarBackup"),
+        ]
+    ),
+]
+```
+
 ## Usage
 
 ```swift
